@@ -2,4 +2,132 @@
 title: Data Cleaning
 format: typst
 ---
+## Part 2
+```{r}
+library(tidyverse)
+library(readr)
+
+raw <- read_csv("data/g24_sov_by_g24_svprec.csv")
+glimpse(raw)
+
+meta_cols <- c(
+  "COUNTY", "FIPS", "SVPREC", "SVPREC_KEY",
+  "ELECTION", "GEO_TYPE"
+)
+
+raw2 <- raw |>
+  mutate(across(all_of(meta_cols), as.character))
+
+clean <- raw2 |>
+  mutate(
+    across(
+      .cols = setdiff(names(raw2), meta_cols),
+      .fns = ~ if (is.character(.x) && all(str_detect(na.omit(.x), "^[0-9]+$"))) {
+                 as.numeric(.x)
+               } else {
+                 .x
+               }
+    )
+  )
+
+summary(clean$TOTVOTE)
+
+summary(clean$CNGDEM01)
+summary(clean$CNGREP01)
+
+colSums(is.na(clean))
+
+clean <- clean |>
+mutate(across(where(is.numeric), ~ replace_na(.x, 0)))
+
+clean |>
+count(SVPREC) |>
+filter(n > 1)
+
+write_csv(clean, "data/g24_sov_by_g24_svprec_clean.csv")
+```
+
+## Part 5
+
+```{r}
+library(tidyverse)
+library(sf)
+library(readr)
+
+sr_votes_raw <- read_csv("data/g24_sov_by_g24_srprec.csv")
+
+sr_votes <- sr_votes_raw |>
+  mutate(
+    SRPREC = as.character(SRPREC),
+
+    dem1 = replace_na(as.numeric(CNGDEM01), 0),
+    dem2 = replace_na(as.numeric(CNGDEM02), 0),
+    rep1 = replace_na(as.numeric(CNGREP01), 0),
+    rep2 = replace_na(as.numeric(CNGREP02), 0),
+
+    dem_votes = dem1 + dem2,
+    rep_votes = rep1 + rep2
+  ) |>
+  select(SRPREC, dem_votes, rep_votes)
+```
+
+```{r}
+sr_shp <- st_read("data/srprec_state_g24_v01_shp/srprec_state_g24_v01_shp.shp")
+
+sr_geo <- sr_shp |>
+  mutate(SRPREC = as.character(SRPREC)) |>
+  st_transform(3310) |>
+  st_set_precision(1) |>
+  st_make_valid() |>
+  st_collection_extract("POLYGON") |>
+  mutate(sr_area = as.numeric(st_area(geometry)))
+```
+
+```{r}
+sr_joined <- sr_geo |>
+  left_join(sr_votes, by = "SRPREC")
+```
+
+```{r}
+ab604 <- st_read("data/AB604/AB604.shp") |>
+  st_transform(3310)
+
+names(ab604)
+```
+
+```{r}
+sr_for_int <- sr_joined |>
+  select(SRPREC, sr_area, dem_votes, rep_votes)
+
+cd_for_int <- ab604 |>
+  select(DISTRICT)
+
+sr_cd_intersect <- st_intersection(sr_for_int, cd_for_int) |>
+  mutate(
+    piece_area = as.numeric(st_area(geometry)),
+    weight = piece_area / sr_area,
+    dem_weighted = dem_votes * weight,
+    rep_weighted = rep_votes * weight
+  )
+```
+
+```{r}
+district_votes_ab604 <- sr_cd_intersect |>
+  st_drop_geometry() |>
+  group_by(DISTRICT) |>
+  summarise(
+    dem_votes = sum(dem_weighted, na.rm = TRUE),
+    rep_votes = sum(rep_weighted, na.rm = TRUE),
+    total_two_party = dem_votes + rep_votes,
+    dem_share = dem_votes / total_two_party,
+    .groups = "drop"
+  )
+
+district_votes_ab604
+```
+
+```{r}
+write_csv(district_votes_ab604,
+          "data/district_votes_2024_under_ab604.csv")
+```
 

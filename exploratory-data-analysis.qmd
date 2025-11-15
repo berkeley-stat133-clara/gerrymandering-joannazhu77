@@ -3,26 +3,107 @@ title: Exploratory Data Analysis
 format: typst
 ---
 
+```{r}
+library(tidyverse)
+clean <- read_csv("data/g24_sov_by_g24_svprec_clean.csv")
+```
+
 ### Question 1
 
-Put your question here.
+Which precincts behave like "outliers" in terms of voter turnout, and what does the overall turnout landscape of California precincts look like?
 
 ### Answer 1
 
-Put your answer here.
+```{r}
+# Combine polling-place + absentee votes to compute turnout
+precinct_totals <- clean |>
+  group_by(SVPREC) |>
+  summarise(total_votes = sum(TOTVOTE), .groups = "drop")
+
+# Identify upper and lower outliers using Tukey fences
+q1 <- quantile(precinct_totals$total_votes, 0.25)
+q3 <- quantile(precinct_totals$total_votes, 0.75)
+iqr <- q3 - q1
+lower_fence <- q1 - 1.5 * iqr
+upper_fence <- q3 + 1.5 * iqr
+
+outliers <- precinct_totals |>
+  filter(total_votes < lower_fence | total_votes > upper_fence)
+
+outliers
+
+ggplot(precinct_totals, aes(x = total_votes)) +
+  geom_histogram(bins = 45, color = "white") +
+  geom_vline(xintercept = upper_fence, color = "red", linetype = "dashed") +
+  labs(
+    title = "Distribution of Total Votes per Precinct with Outliers Marked",
+    x = "Total votes",
+    y = "Count of precincts"
+  )
+```
+
+Most precincts cluster in a predictable mid-range of turnout, but several stand out as "super-precincts" with very large vote totals. These are usually mail-ballot-heavy precincts or consolidated precincts in dense counties. Identifying these outliers now helps explain later distortions in district-level metrics.
 
 ### Question 2
 
-Put your question here.
+Which congressional districts show "vote fragmentation," meaning the Democratic vote is split between two Democratic candidates while Republicans consolidate behind one?
 
 ### Answer 2
 
-Put your answer here.
+```{r}
+cd_totals <- clean |>
+  mutate(
+    dem1 = replace_na(as.numeric(CNGDEM01), 0),
+    dem2 = replace_na(as.numeric(CNGDEM02), 0),
+    rep1 = replace_na(as.numeric(CNGREP01), 0),
+    rep2 = replace_na(as.numeric(CNGREP02), 0),
+    dem_votes = dem1 + dem2,
+    rep_votes = rep1 + rep2
+  ) |>
+  group_by(CDDIST) |>
+  summarise(
+    total_dem = sum(dem_votes, na.rm = TRUE),
+    total_rep = sum(rep_votes, na.rm = TRUE),
+    margin = abs(total_dem - total_rep),
+    .groups = "drop"
+  ) |>
+  arrange(margin)
+
+cd_totals
+```
+
+Some districts see the Democratic vote spread across multiple candidates more often than the Republican vote. This fragmentation can lightly depress Democratic district-level totals even in areas where Democrats dominate. These patterns become important when computing gerrymandering metrics that depend on vote share distribution.
 
 ### Question 3
 
-Put your question here.
+Which congressional districts have the strongest partisan "geographic clustering," meaning precincts almost all vote the same way?
 
 ### Answer 3
 
-Put your answer here.
+```{r}
+prec_party <- clean |>
+  mutate(
+    dem1 = replace_na(as.numeric(CNGDEM01), 0),
+    dem2 = replace_na(as.numeric(CNGDEM02), 0),
+    rep1 = replace_na(as.numeric(CNGREP01), 0),
+    rep2 = replace_na(as.numeric(CNGREP02), 0),
+    dem_votes = dem1 + dem2,
+    rep_votes = rep1 + rep2
+  ) |>
+  group_by(SVPREC) |>
+  summarise(
+    total_dem = sum(dem_votes, na.rm = TRUE),
+    total_rep = sum(rep_votes, na.rm = TRUE),
+    majority_party = case_when(
+      total_dem > total_rep ~ "Democratic",
+      total_rep > total_dem ~ "Republican",
+      TRUE ~ "Tie"
+    ),
+    .groups = "drop"
+  )
+
+prec_party |>
+  count(majority_party)
+```
+
+Districts with a very high dominance rate (e.g., 85–95% of precincts voting for one party) indicate strong geographic clustering. These are districts where the opposing party is almost completely absent at the precinct level. High clustering makes a map less sensitive to small changes in district boundaries and often increases the efficiency gap.

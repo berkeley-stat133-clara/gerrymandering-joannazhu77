@@ -3,9 +3,125 @@ title: Gerrymandering Metrics
 format: typst
 ---
 
+```{r}
+library(tidyverse)
+clean <- read_csv("data/g24_sov_by_g24_svprec_clean.csv")
+```
+
 ### 2024 Election Results and the 2024 District Map
 
+```{r}
+district_votes_2024 <- clean |>
+  mutate(
+    dem1 = replace_na(as.numeric(CNGDEM01), 0),
+    dem2 = replace_na(as.numeric(CNGDEM02), 0),
+    rep1 = replace_na(as.numeric(CNGREP01), 0),
+    rep2 = replace_na(as.numeric(CNGREP02), 0),
+    dem_votes = dem1 + dem2,
+    rep_votes = rep1 + rep2
+  ) |>
+  group_by(CDDIST) |>
+  summarise(
+    total_dem = sum(dem_votes),
+    total_rep = sum(rep_votes),
+    total_two_party = total_dem + total_rep,
+    dem_share = total_dem / total_two_party,
+    .groups = "drop"
+  )
+  
+district_votes_2024
+```
 
+```{r}
+mean_dem <- mean(district_votes_2024$dem_share)
+median_dem <- median(district_votes_2024$dem_share)
+mean_median_score_2024 <- mean_dem - median_dem
+mean_median_score_2024
+```
+
+```{r}
+wasted_votes <- function(vA, vB) {
+  total <- vA + vB
+  threshold <- floor(total / 2) + 1
+  
+  if (vA > vB) {
+    wasted_A <- vA - threshold
+    wasted_B <- vB
+  } else {
+    wasted_A <- vA
+    wasted_B <- vB - threshold
+  }
+  
+  c(A = wasted_A, B = wasted_B)
+}
+
+waste_df <- district_votes_2024 |>
+  rowwise() |>
+  mutate(
+    waste = list(wasted_votes(total_dem, total_rep)),
+    wasted_dem = waste["A"],
+    wasted_rep = waste["B"]
+  ) |>
+  ungroup()
+
+total_wasted_dem <- sum(waste_df$wasted_dem)
+total_wasted_rep <- sum(waste_df$wasted_rep)
+efficiency_gap_2024 <- (total_wasted_dem - total_wasted_rep) /
+                       sum(district_votes_2024$total_two_party)
+
+efficiency_gap_2024
+```
 
 ### 2024 Election Results and the proposed 2025 District Map
 
+```{r}
+library(tidyverse)
+library(readr)
+
+ab604_votes <- read_csv("data/district_votes_2024_under_ab604.csv")
+
+ab604_votes
+```
+
+```{r}
+mean_dem_ab604 <- mean(ab604_votes$dem_share)
+median_dem_ab604 <- median(ab604_votes$dem_share)
+
+mean_median_score_ab604 <- mean_dem_ab604 - median_dem_ab604
+mean_median_score_ab604
+```
+
+```{r}
+wasted_votes <- function(vA, vB) {
+  total <- vA + vB
+  threshold <- floor(total / 2) + 1
+  
+  if (vA > vB) {
+    wasted_A <- vA - threshold
+    wasted_B <- vB
+  } else {
+    wasted_A <- vA
+    wasted_B <- vB - threshold
+  }
+  
+  c(A = wasted_A, B = wasted_B)
+}
+
+waste_ab604 <- ab604_votes |>
+  rowwise() |>
+  mutate(
+    waste = list(wasted_votes(dem_votes, rep_votes)),
+    wasted_dem = waste["A"],
+    wasted_rep = waste["B"]
+  ) |>
+  ungroup()
+
+total_wasted_dem_ab604 <- sum(waste_ab604$wasted_dem)
+total_wasted_rep_ab604 <- sum(waste_ab604$wasted_rep)
+
+efficiency_gap_ab604 <- (total_wasted_dem_ab604 - 
+                         total_wasted_rep_ab604) /
+                        sum(ab604_votes$total_two_party)
+
+efficiency_gap_ab604
+```

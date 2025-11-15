@@ -1,5 +1,151 @@
 ---
-title: Dashboard
-format: dashboard
+title: Gerrymandering Dashboard
+format: 
+  dashboard:
+    orientation: rows
+    theme: yeti
 ---
 
+```{r}
+library(tidyverse)
+library(sf)
+library(leaflet)
+library(reactable)
+
+cd_2024 <- st_read("data/tl_2024_06_cd119/tl_2024_06_cd119.shp") |>
+  st_transform(3310)
+
+cd_ab604 <- st_read("data/AB604/AB604.shp") |>
+  st_transform(3310)
+
+clean <- read_csv("data/g24_sov_by_g24_svprec_clean.csv")
+
+district_votes_2024 <- clean |>
+  mutate(
+    dem1 = replace_na(as.numeric(CNGDEM01), 0),
+    dem2 = replace_na(as.numeric(CNGDEM02), 0),
+    rep1 = replace_na(as.numeric(CNGREP01), 0),
+    rep2 = replace_na(as.numeric(CNGREP02), 0),
+    dem_votes = dem1 + dem2,
+    rep_votes = rep1 + rep2
+  ) |>
+  group_by(CDDIST) |>
+  summarise(
+    dem_votes = sum(dem_votes),
+    rep_votes = sum(rep_votes)
+  ) |>
+  rename(district = CDDIST)
+
+votes_ab604 <- read_csv("data/district_votes_2024_under_ab604.csv") |>
+  rename(district = DISTRICT)
+
+votes_2024 <- district_votes_2024
+```
+
+```{r}
+mean_median <- function(votes_df) {
+  votes_df |>
+    mutate(
+      total = dem_votes + rep_votes,
+      dem_share = dem_votes / total
+    ) |>
+    summarise(
+      mean = mean(dem_share),
+      median = median(dem_share),
+      score = mean - median
+    ) |>
+    pull(score)
+}
+
+eff_gap <- function(votes_df) {
+  votes_df |>
+    mutate(
+      total = dem_votes + rep_votes,
+      winner = if_else(dem_votes > rep_votes, "D", "R"),
+      wasted_dem = if_else(
+        winner == "D",
+        dem_votes - (floor(total / 2) + 1),
+        dem_votes
+      ),
+      wasted_rep = if_else(
+        winner == "R",
+        rep_votes - (floor(total / 2) + 1),
+        rep_votes
+      )
+    ) |>
+    summarise(
+      gap = (sum(wasted_dem) - sum(wasted_rep)) / sum(total)
+    ) |>
+    pull(gap)
+}
+
+metrics <- tibble(
+  plan = c("2024 districts", "AB 604 districts"),
+  dem_seats = c(
+    sum(votes_2024$dem_votes > votes_2024$rep_votes),
+    sum(votes_ab604$dem_votes > votes_ab604$rep_votes)
+  ),
+  rep_seats = c(
+    sum(votes_2024$rep_votes > votes_2024$dem_votes),
+    sum(votes_ab604$rep_votes > votes_ab604$dem_votes)
+  ),
+  mean_median = c(
+    mean_median(votes_2024),
+    mean_median(votes_ab604)
+  ),
+  efficiency_gap = c(
+    eff_gap(votes_2024),
+    eff_gap(votes_ab604)
+  )
+)
+
+metrics
+```
+
+```{r}
+cd_2024_leaf <- st_transform(cd_2024, 4326)
+
+leaflet(cd_2024_leaf) |>
+  addProviderTiles("CartoDB.Positron") |>
+  addPolygons(
+    color = "blue",
+    fillOpacity = 0.2,
+    weight = 1,
+    popup = ~paste("District:", CD119FP)
+  )
+```
+
+```{r}
+cd_ab604_leaf <- st_transform(cd_ab604, 4326)
+
+leaflet(cd_ab604_leaf) |>
+  addProviderTiles("CartoDB.Positron") |>
+  addPolygons(
+    color = "red",
+    fillOpacity = 0.2,
+    weight = 1,
+    popup = ~paste("District:", DISTRICT)
+  )
+```
+
+```{r}
+reactable(
+  metrics,
+  striped = TRUE,
+  highlight = TRUE
+)
+```
+
+### Methodology
+
+**Data sources**
+This analysis draws on three primary datasets. The precinct-level 2024 election returns come from the California Secretary of State, providing Democratic and Republican vote totals for each precinct. The current 2024 congressional district boundaries are taken from the U.S. Census Bureau’s TIGER/Line shapefiles, and the proposed AB 604 district boundaries are obtained from the California Legislature’s GIS shapefile. Together, these sources allow a consistent comparison between the districts used in 2024 and the alternative districting plan.
+
+**Data cleaning**
+Before analysis, all precinct identifiers were converted to character format to avoid mismatches during merging. Missing vote counts were replaced with zero to keep totals consistent across precincts. Both district shapefiles were projected into the California Albers coordinate system (EPSG 3310), their geometries were validated, and any invalid polygons were corrected. These steps ensured a clean spatial foundation for accurate intersections and area-weighting.
+
+**Estimation process**
+District results for the 2024 map were calculated by directly summing precinct vote totals within each district. For the AB 604 plan, each precinct was intersected with the proposed districts, and the area of each overlapping piece was measured. Precinct votes were allocated proportionally based on the fraction of precinct area falling inside each district, and these weighted portions were summed to produce Democratic and Republican totals under the new map. Using these aggregated results, the dashboard computes the number of seats won, the mean–median score, and the efficiency gap for both district plans.
+
+**Caveats**
+Although these metrics offer insight into how different district maps can shape electoral outcomes, they cannot fully diagnose gerrymandering on their own. All estimates rely on a single election year, which may not reflect long-term partisan behavior. Turnout differences can distort measures like the mean–median score, and the efficiency gap can behave unpredictably in districts with narrow margins. These limitations mean that the results should be interpreted as indicators, not definitive proof of partisan bias.
